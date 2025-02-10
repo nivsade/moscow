@@ -1,0 +1,213 @@
+investment = train_full[train_full['product_type'] == 'Investment']
+owner = train_full[train_full['product_type'] == 'OwnerOccupier']
+investment_test = test_full[test_full['product_type'] == 'Investment']
+owner_test = test_full[test_full['product_type'] == 'OwnerOccupier']
+unknown_test = test_full[test_full['product_type'].isna()]
+print(owner_test.shape)
+print(investment_test.shape)
+print(unknown_test.shape)
+
+# Function to calculate RMSLE
+def rmsle(y_true, y_pred):
+    return np.sqrt(mean_squared_log_error(y_true, np.maximum(y_pred, 0)))  # למנוע בעיות עם ערכים שליליים
+# Function to encode categorical variables
+def preprocess_categorical(data):
+    label_encoder = LabelEncoder()
+    categorical_columns = data.select_dtypes(include=['object']).columns
+    for col in categorical_columns:
+        data[col] = label_encoder.fit_transform(data[col].astype(str))
+    return data
+
+# Prepare data - remove NaN values from price_doc
+train_full_clean = train_full.dropna(subset=["price_doc"])
+investment_clean = investment.dropna(subset=["price_doc"])
+owner_clean = owner.dropna(subset=["price_doc"])
+
+# Convert categorical variables
+train_full_clean = preprocess_categorical(train_full_clean)
+investment_clean = preprocess_categorical(investment_clean)
+owner_clean = preprocess_categorical(owner_clean)
+
+# Split data into Train/Test for each dataset
+X_full = train_full_clean.drop(columns=['price_doc'])
+y_full = train_full_clean['price_doc']
+X_train_full, X_test_full, y_train_full, y_test_full = train_test_split(X_full, y_full, test_size=0.2, random_state=42)
+
+X_inv = investment_clean.drop(columns=['price_doc'])
+y_inv = investment_clean['price_doc']
+X_train_inv, X_test_inv, y_train_inv, y_test_inv = train_test_split(X_inv, y_inv, test_size=0.2, random_state=42)
+
+X_owner = owner_clean.drop(columns=['price_doc'])
+y_owner = owner_clean['price_doc']
+X_train_owner, X_test_owner, y_train_owner, y_test_owner = train_test_split(X_owner, y_owner, test_size=0.2, random_state=42)
+
+# Create DMatrix for XGBoost
+dtrain_full = xgb.DMatrix(X_train_full, label=y_train_full, enable_categorical=True)
+dtest_full = xgb.DMatrix(X_test_full, label=y_test_full, enable_categorical=True)
+
+dtrain_inv = xgb.DMatrix(X_train_inv, label=y_train_inv, enable_categorical=True)
+dtest_inv = xgb.DMatrix(X_test_inv, label=y_test_inv, enable_categorical=True)
+
+dtrain_owner = xgb.DMatrix(X_train_owner, label=y_train_owner, enable_categorical=True)
+dtest_owner = xgb.DMatrix(X_test_owner, label=y_test_owner, enable_categorical=True)
+
+# Set XGBoost parameters
+params = {
+    'n_estimators': 400,
+    'learning_rate': 0.1,
+    'max_depth': 6,
+    'min_child_weight': 1,
+    'subsample': 0.8,
+    'colsample_bytree': 0.9,
+    'colsample_bylevel': 1,
+    'reg_alpha': 0,
+    'reg_lambda': 10,
+    'seed': 42,
+    'objective': 'reg:squarederror',
+    'nthread': 8}
+
+# Train XGBoost model on full dataset
+model_full = xgb.train(
+    params=params,
+    dtrain=dtrain_full,
+    num_boost_round=300,
+    evals=[(dtest_full, "Validation")],
+    early_stopping_rounds=10,
+    verbose_eval=False)
+
+# Train XGBoost model on Investment dataset
+model_inv = xgb.train(
+    params=params,
+    dtrain=dtrain_inv,
+    num_boost_round=300,
+    evals=[(dtest_inv, "Validation")],
+    early_stopping_rounds=10,
+    verbose_eval=False)
+
+# Train XGBoost model on Owner dataset
+model_owner = xgb.train(
+    params=params,
+    dtrain=dtrain_owner,
+    num_boost_round=300,
+    evals=[(dtest_owner, "Validation")],
+    early_stopping_rounds=10,
+    verbose_eval=False)
+
+# Make predictions
+y_pred_full = model_full.predict(dtest_full)
+y_pred_inv = model_inv.predict(dtest_inv)
+y_pred_owner = model_owner.predict(dtest_owner)
+
+# Calculate RMSLE for each model
+rmsle_full = rmsle(y_test_full, y_pred_full)
+rmsle_inv = rmsle(y_test_inv, y_pred_inv)
+rmsle_owner = rmsle(y_test_owner, y_pred_owner)
+
+# Calculate combined RMSLE for Investment + Owner models
+y_test_combined = np.concatenate([y_test_inv, y_test_owner])
+y_pred_combined = np.concatenate([y_pred_inv, y_pred_owner])
+rmsle_combined = rmsle(y_test_combined, y_pred_combined)
+
+# Show results
+results = pd.DataFrame({
+    "Dataset": ["Full Dataset", "Investment", "Owner", "Combined"],
+    "RMSLE": [rmsle_full, rmsle_inv, rmsle_owner, rmsle_combined]})
+results
+
+
+
+from sklearn.preprocessing import LabelEncoder
+import pandas as pd
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+
+# Function to convert categorical variables to numbers, handling missing values
+def preprocess_categorical(data, fitted_encoders=None):
+    label_encoders = {} if fitted_encoders is None else fitted_encoders
+    categorical_columns = data.select_dtypes(include=['object']).columns
+
+    for col in categorical_columns:
+        # Handle missing values in 'product_type' if needed
+        if col == 'product_type':
+            data[col] = data[col].fillna('Unknown')  # החלפת NaN ב־'Unknown'
+
+        if col in label_encoders:
+            unknown_mask = ~data[col].astype(str).isin(label_encoders[col].classes_)
+            if unknown_mask.any():
+                data.loc[unknown_mask, col] = 'Unknown'  # Assign unknown values to 'Unknown'
+            data[col] = label_encoders[col].transform(data[col].astype(str))
+        else:
+            le = LabelEncoder()
+            unique_values = data[col].astype(str).unique().tolist()
+            if 'Unknown' not in unique_values:
+                unique_values.append('Unknown')
+            le.fit(unique_values)
+            data[col] = le.transform(data[col].astype(str))
+            label_encoders[col] = le
+
+    return data, label_encoders
+
+# Process categorical variables
+train_full, label_encoders = preprocess_categorical(train_full)
+
+# Prepare training data
+X_train = train_full.drop(columns=['id', 'price_doc'])
+y_train = train_full['price_doc']
+
+# Split data into Train and Validation sets
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.25, random_state=42)
+
+# Create DMatrix for XGBoost
+dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
+dval = xgb.DMatrix(X_val, label=y_val, enable_categorical=True)
+
+# XGBoost parameters
+params = {
+    'n_estimators': 400,
+    'learning_rate': 0.1,
+    'max_depth': 6,
+    'min_child_weight': 1,
+    'subsample': 0.8,
+    'colsample_bytree': 0.9,
+    'colsample_bylevel': 1,
+    'reg_alpha': 0,
+    'reg_lambda': 10,
+    'seed': 42,
+    'objective': 'reg:squarederror',
+    'nthread': 8
+}
+
+# Train the model
+model = xgb.train(
+    params=params,
+    dtrain=dtrain,
+    num_boost_round=200,
+    evals=[(dval, "Validation")],
+    early_stopping_rounds=10,
+    verbose_eval=False
+)
+
+# Function to make predictions
+def predict_prices(test_data, model, label_encoders, train_columns):
+    test_data, _ = preprocess_categorical(test_data, label_encoders)
+
+    ids = test_data['id']
+    test_data = test_data[train_columns]
+    # Create DMatrix and make predictions
+    dtest = xgb.DMatrix(test_data, enable_categorical=True)
+    predictions = model.predict(dtest) * 0.96
+    # Return DataFrame with IDs and predicted prices
+    result = pd.DataFrame({"id": ids, "price_doc": predictions})
+
+    return result
+
+# Make predictions for each dataset
+investment_predictions = predict_prices(investment_test, model, label_encoders, train_full.columns.drop(['id', 'price_doc']))
+owner_predictions = predict_prices(owner_test, model, label_encoders, train_full.columns.drop(['id', 'price_doc']))
+unknown_predictions = predict_prices(unknown_test, model, label_encoders, train_full.columns.drop(['id', 'price_doc']))
+
+# Combine all predictions
+combined_predictions = pd.concat([investment_predictions, owner_predictions, unknown_predictions])
+# Save predictions to files
+combined_predictions.to_excel("combined_predictions.xlsx", index=False)
+combined_predictions.to_csv("combined_predictions.csv",index=False)
