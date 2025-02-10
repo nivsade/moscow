@@ -1,2 +1,2 @@
-# moscow
-Forecasting apartment prices in Moscow
+Sberbank, Russia’s largest bank, aims to improve real estate price predictions to help renters, developers, and lenders make informed decisions. While Russia’s housing market is stable, economic volatility adds complexity to pricing forecasts. This competition challenges participants to develop models that leverage housing features and macroeconomic data for accurate predictions.
+solution of Sberbank Contest on Kaggle https://www.kaggle.com/c/sberbank-russian-housing-market
